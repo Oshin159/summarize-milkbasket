@@ -20,8 +20,7 @@ import json
 import time
 import csv
 import os
-import google.generativeai as genai
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Load variables from .env file
@@ -31,11 +30,41 @@ load_dotenv()
 # CONFIG & AUTH
 # ─────────────────────────────────────────────
 AUTH_TOKEN = os.getenv("MILKBASKET_BEARER_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 API_URL = "https://consumerbff.milkbasket.com/graphql"
+CONFIG_FILE = "categories_config.json"
 CACHE_FILE = "item_categories.csv"
 SUMMARY_DIR = "summary"
+
+# ─────────────────────────────────────────────
+# CONFIG LOAD/SAVE
+# ─────────────────────────────────────────────
+
+def load_categories_config():
+    """Loads categories and keywords from JSON."""
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    # Default fallback
+    return {
+        "categories": ["fruits", "vegetables", "bakery", "dairy", "others"],
+        "keywords": {
+            "fruits": ["apple", "banana"],
+            "vegetables": ["potato", "onion"],
+            "bakery": ["bread"],
+            "dairy": ["milk"]
+        }
+    }
+
+def save_categories_config(config):
+    """Saves categories and keywords to JSON."""
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=4)
+
+# Load global config
+CAT_CONFIG = load_categories_config()
+VALID_CATEGORIES = CAT_CONFIG["categories"]
+KEYWORDS = CAT_CONFIG["keywords"]
 
 HEADERS = {
     "accept": "*/*",
@@ -56,7 +85,6 @@ HEADERS = {
     "role": "0",
     "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
 }
-
 
 # ─────────────────────────────────────────────
 # HELPERS
@@ -86,87 +114,69 @@ def load_category_cache():
         with open(CACHE_FILE, "r", encoding="utf-8") as f:
             reader = csv.reader(f)
             for row in reader:
-                if len(row) == 2:
+                if len(row) >= 2:
                     # Store normalized keys
-                    cache[row[0].strip().lower()] = row[1]
+                    cache[row[0].strip().lower()] = row[1].strip().lower()
     return cache
 
 
-def save_to_category_cache(item_category_map):
-    """Appends new item-category mappings to the local CSV file."""
+def save_to_category_cache(item, category):
+    """Appends a single item-category mapping to the local CSV file."""
+    file_exists = os.path.exists(CACHE_FILE)
     with open(CACHE_FILE, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        for item, category in item_category_map.items():
-            # item is already likely the original string from AI/unique_items
-            writer.writerow([item, category])
+        writer.writerow([item, category])
 
 
-def categorize_items_smart(item_names):
-    """Categorize items using local cache first, then Gemini."""
-    cache = load_category_cache()
+def categorize_item_interactive(name, cache):
+    """Categorize a single item using cache, keywords, and user interaction."""
+    global VALID_CATEGORIES, KEYWORDS
+    name_lower = name.strip().lower()
     
-    final_map = {}
-    to_categorize = []
+    # 1. Check cache
+    if name_lower in cache:
+        return cache[name_lower]
     
-    for name in item_names:
-        name_lower = name.strip().lower()
-        if name_lower in cache:
-            final_map[name] = cache[name_lower]
-        else:
-            to_categorize.append(name)
+    # 2. Try keyword guessing
+    guess_cat = "others"
+    for cat, keywords in KEYWORDS.items():
+        if any(kw in name_lower for kw in keywords):
+            guess_cat = cat
+            break
             
-    if not to_categorize:
-        return final_map
-
-    # Call Gemini for unknowns
-    if not GEMINI_API_KEY:
-        print("    ⚠️  No Gemini API Key found in .env; skipping AI.")
-        for name in to_categorize:
-            final_map[name] = "others"
-        return final_map
-
-    print(f"🤖  AI: Categorizing {len(to_categorize)} new items...")
-    # print(f"    Items: {to_categorize}") # Debug: see what's being sent
-
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    categories = ["fruits", "vegetables", "bakery", "dairy", "others"]
+    # 3. Interactive confirmation/input
+    print(f"\n🔍  New Item: \"{name}\"")
+    choice = input(f"    Suggest category: {guess_cat}. Is this correct? (y/n): ").strip().lower()
     
-    prompt = f"""
-    Act as an expert Indian grocery classifier. Categorize the list of items provided below into exactly one of these five categories:
-    - 'fruits': All fresh fruits.
-    - 'vegetables': All fresh vegetables and herbs.
-    - 'bakery': Breads, buns, pav, cookies, biscuits, cakes, and rusks.
-    - 'dairy': Milk, paneer, curd, yogurt, butter, cheese, and ghee.
-    - 'others': Everything else, including staples (atta, rice), pulses, eggs, meat, spices, and household items.
-
-    Input Items: {json.dumps(to_categorize)}
-
-    Output Requirement:
-    - Return a JSON object where the keys are EXACTLY the item names from the input.
-    - The values must be one of: {', '.join(categories)}.
-    """
-    
-    try:
-        response = model.generate_content(
-            prompt, 
-            generation_config={"response_mime_type": "application/json"}
-        )
-        new_mappings = json.loads(response.text)
-        
-        # print(f"    AI Response: {new_mappings}") # Debug: see raw result
-
-        # Save new findings to cache
-        save_to_category_cache(new_mappings)
-        
-        # Merge with final map
-        final_map.update(new_mappings)
-    except Exception as e:
-        print(f"    ⚠️  AI Error: {e}")
-        for name in to_categorize:
-            final_map[name] = "others"
+    final_cat = guess_cat
+    if choice != 'y':
+        print(f"    Existing categories: {', '.join(VALID_CATEGORIES)}")
+        while True:
+            manual_cat = input(f"    Enter category (or type a NEW one to create it): ").strip().lower()
+            if not manual_cat:
+                continue
+                
+            if manual_cat not in VALID_CATEGORIES:
+                confirm_new = input(f"    \" {manual_cat} \" is new. Create it? (y/n): ").strip().lower()
+                if confirm_new == 'y':
+                    VALID_CATEGORIES.append(manual_cat)
+                    if manual_cat not in KEYWORDS:
+                        KEYWORDS[manual_cat] = []
+                    # Save updated config
+                    save_categories_config({"categories": VALID_CATEGORIES, "keywords": KEYWORDS})
+                    final_cat = manual_cat
+                    break
+                else:
+                    print(f"    Available: {', '.join(VALID_CATEGORIES)}")
+                    continue
+            else:
+                final_cat = manual_cat
+                break
             
-    return final_map
+    # Save to cache
+    save_to_category_cache(name, final_cat)
+    cache[name_lower] = final_cat
+    return final_cat
 
 
 # ─────────────────────────────────────────────
@@ -252,8 +262,8 @@ def print_order(detail):
     print(f"\n{'═'*50}")
     print(f"  Order ID  : {bill['id']}")
     print(f"  Date      : {bill['date'].strip()}")
-    print(f"  Sub-total : {bill_info['subTotal']}")
-    print(f"  Savings   : {bill_info['subSavings']}")
+    print(f"  Sub-total : ₹{bill_info['subTotal']}")
+    print(f"  Savings   : ₹{bill_info['subSavings']}")
     print(f"  Delivery  : ₹{bill_info['deliveryFee']}")
     print(f"  Payable   : ₹{bill_info['payableAmount']}")
     print(f"{'─'*50}")
@@ -284,17 +294,13 @@ if __name__ == "__main__":
         print("  2. Open DevTools → Network tab")
         print("  3. Click any request to consumerbff.milkbasket.com")
         print("  4. Copy the Authorization header value (after 'Bearer ')\n")
-        print("  💡 Tip: Save this as MILKBASKET_BEARER_TOKEN in your .env file to skip this prompt.")
         AUTH_TOKEN = input("\nPaste your Bearer token: ").strip()
 
     if not AUTH_TOKEN:
         print("❌  No token provided. Exiting.")
         exit(1)
 
-    if not GEMINI_API_KEY:
-        GEMINI_API_KEY = input("Paste your Gemini API Key (optional, Enter to skip AI): ").strip()
-
-    print("\n📅  Filter by Date (Optional, press Enter to skip)")
+    print("\n📅  Filter by Date (Enter for last 3 months)")
     start_date_str = input("  Start Date (YYYY-MM-DD): ").strip()
     end_date_str = input("  End Date   (YYYY-MM-DD): ").strip()
 
@@ -303,6 +309,10 @@ if __name__ == "__main__":
     try:
         if start_date_str:
             start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+        else:
+            start_date = datetime.now() - timedelta(days=90)
+            print(f"    Using default start date: {start_date.strftime('%Y-%m-%d')}")
+            
         if end_date_str:
             end_date = datetime.strptime(end_date_str, "%Y-%m-%d")
     except ValueError:
@@ -313,11 +323,14 @@ if __name__ == "__main__":
     HEADERS["authorization"] = f"Bearer {AUTH_TOKEN}"
     print()
 
+    # Load cache once
+    cache = load_category_cache()
+
     # Step 1: get all orders
     print("📦  Fetching order list...")
     orders = fetch_orders()
     
-    # Filter orders by date if requested
+    # Filter orders by date
     filtered_orders = []
     earliest_date = None
     latest_date = None
@@ -338,9 +351,8 @@ if __name__ == "__main__":
     orders = filtered_orders
     print(f"    Found {len(orders)} orders in range\n")
 
-    # Step 2: fetch detail for each order
+    # Step 2: fetch detail for each order and categorize
     all_rows = []
-    unique_items = set()
     for i, order in enumerate(orders, 1):
         order_id = int(order["id"])
         order_date = order["date"].strip()
@@ -350,33 +362,26 @@ if __name__ == "__main__":
             detail = fetch_order_detail(order_id)
             print_order(detail)
             
-            # Collect data for CSV
+            # Collect data for CSV and categorize on the fly
             for section in detail["data"]:
                 for item in section["data"]:
-                    unique_items.add(item["name"])
+                    item_name = item["name"]
+                    category = categorize_item_interactive(item_name, cache)
+                    
                     all_rows.append({
                         "order date": order_date,
-                        "item name": item["name"],
+                        "item name": item_name,
                         "quantity": item["order"]["quantity"],
                         "mrp": item["price"]["mrp"]["value"],
-                        "price": item["price"]["price"]["value"]
+                        "price": item["price"]["price"]["value"],
+                        "category": category
                     })
         except Exception as e:
             print(f"    ⚠️  Failed: {e}")
 
-        time.sleep(0.5)  # be polite to their servers
+        time.sleep(0.3)  # be polite
 
-    # Step 3: Smart Categorization
-    if all_rows:
-        category_map = categorize_items_smart(list(unique_items))
-        # Normalize keys in category_map for robust lookup
-        normalized_map = {str(k).strip().lower(): v for k, v in category_map.items()}
-        
-        for row in all_rows:
-            item_key = str(row["item name"]).strip().lower()
-            row["category"] = normalized_map.get(item_key, "others")
-
-    # Step 4: Organized Export
+    # Step 3: Organized Export
     if all_rows:
         if not os.path.exists(SUMMARY_DIR):
             os.makedirs(SUMMARY_DIR)
@@ -393,4 +398,28 @@ if __name__ == "__main__":
             dict_writer.writerows(all_rows)
         print(f"\n📁  Exported {len(all_rows)} items to {filename}")
 
+        # Step 4: Summary Table
+        print(f"\n📊  Spending Summary ({date_range_str})")
+        print(f"{'─'*40}")
+        print(f"  {'Category':<20} {'Total Amount':>15}")
+        print(f"{'─'*40}")
+        
+        category_totals = {cat: 0.0 for cat in VALID_CATEGORIES}
+        grand_total = 0.0
+        
+        for row in all_rows:
+            cat = row["category"]
+            price = float(row["price"])
+            category_totals[cat] += price
+            grand_total += price
+            
+        for cat, total in category_totals.items():
+            if total > 0:
+                print(f"  {cat.capitalize():<20} ₹{total:>14.2f}")
+                
+        print(f"{'─'*40}")
+        print(f"  {'Grand Total':<20} ₹{grand_total:>14.2f}")
+        print(f"{'─'*40}")
+
     print("\n✅  Done!\n")
+

@@ -1,0 +1,17 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+ENV/
+
+# Secrets and Local Config
+.env
+item_categories.csv
+
+# Output and logs
+summary/
+*.log
