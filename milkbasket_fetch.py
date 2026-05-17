@@ -18,14 +18,24 @@ Steps:
 import requests
 import json
 import time
+import csv
+import os
+import google.generativeai as genai
 from datetime import datetime
+from dotenv import load_dotenv
+
+# Load variables from .env file
+load_dotenv()
 
 # ─────────────────────────────────────────────
-# Auth token — prompted at runtime
+# CONFIG & AUTH
 # ─────────────────────────────────────────────
-AUTH_TOKEN = None  # set at runtime
+AUTH_TOKEN = os.getenv("MILKBASKET_BEARER_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 API_URL = "https://consumerbff.milkbasket.com/graphql"
+CACHE_FILE = "item_categories.csv"
+SUMMARY_DIR = "summary"
 
 HEADERS = {
     "accept": "*/*",
@@ -53,29 +63,110 @@ HEADERS = {
 # ─────────────────────────────────────────────
 
 def parse_mb_date(mb_date_str, year=None):
-    """
-    Parses Milkbasket date formats:
-    - " 18 May,Monday" (no year)
-    - "31 Mar 2026" (with year)
-    Returns a datetime object.
-    """
+    """Parses various Milkbasket date formats."""
     clean_str = mb_date_str.strip()
-    
-    # Format 1: "31 Mar 2026"
     try:
         return datetime.strptime(clean_str, "%d %b %Y")
     except ValueError:
         pass
 
-    # Format 2: "18 May,Monday"
     if not year:
         year = datetime.now().year
-    
     clean_date = clean_str.split(",")[0].strip()
     try:
         return datetime.strptime(f"{clean_date} {year}", "%d %b %Y")
     except ValueError:
         return None
+
+
+def load_category_cache():
+    """Loads item-category mappings from a local CSV file."""
+    cache = {}
+    if os.path.exists(CACHE_FILE):
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if len(row) == 2:
+                    # Store normalized keys
+                    cache[row[0].strip().lower()] = row[1]
+    return cache
+
+
+def save_to_category_cache(item_category_map):
+    """Appends new item-category mappings to the local CSV file."""
+    with open(CACHE_FILE, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        for item, category in item_category_map.items():
+            # item is already likely the original string from AI/unique_items
+            writer.writerow([item, category])
+
+
+def categorize_items_smart(item_names):
+    """Categorize items using local cache first, then Gemini."""
+    cache = load_category_cache()
+    
+    final_map = {}
+    to_categorize = []
+    
+    for name in item_names:
+        name_lower = name.strip().lower()
+        if name_lower in cache:
+            final_map[name] = cache[name_lower]
+        else:
+            to_categorize.append(name)
+            
+    if not to_categorize:
+        return final_map
+
+    # Call Gemini for unknowns
+    if not GEMINI_API_KEY:
+        print("    ⚠️  No Gemini API Key found in .env; skipping AI.")
+        for name in to_categorize:
+            final_map[name] = "others"
+        return final_map
+
+    print(f"🤖  AI: Categorizing {len(to_categorize)} new items...")
+    # print(f"    Items: {to_categorize}") # Debug: see what's being sent
+
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    categories = ["fruits", "vegetables", "bakery", "dairy", "others"]
+    
+    prompt = f"""
+    Act as an expert Indian grocery classifier. Categorize the list of items provided below into exactly one of these five categories:
+    - 'fruits': All fresh fruits.
+    - 'vegetables': All fresh vegetables and herbs.
+    - 'bakery': Breads, buns, pav, cookies, biscuits, cakes, and rusks.
+    - 'dairy': Milk, paneer, curd, yogurt, butter, cheese, and ghee.
+    - 'others': Everything else, including staples (atta, rice), pulses, eggs, meat, spices, and household items.
+
+    Input Items: {json.dumps(to_categorize)}
+
+    Output Requirement:
+    - Return a JSON object where the keys are EXACTLY the item names from the input.
+    - The values must be one of: {', '.join(categories)}.
+    """
+    
+    try:
+        response = model.generate_content(
+            prompt, 
+            generation_config={"response_mime_type": "application/json"}
+        )
+        new_mappings = json.loads(response.text)
+        
+        # print(f"    AI Response: {new_mappings}") # Debug: see raw result
+
+        # Save new findings to cache
+        save_to_category_cache(new_mappings)
+        
+        # Merge with final map
+        final_map.update(new_mappings)
+    except Exception as e:
+        print(f"    ⚠️  AI Error: {e}")
+        for name in to_categorize:
+            final_map[name] = "others"
+            
+    return final_map
 
 
 # ─────────────────────────────────────────────
@@ -186,16 +277,22 @@ def print_order(detail):
 
 if __name__ == "__main__":
     print("\n🛒  Milkbasket Order Fetcher\n")
-    print("How to get your token:")
-    print("  1. Open milkbasket.com and log in")
-    print("  2. Open DevTools → Network tab")
-    print("  3. Click any request to consumerbff.milkbasket.com")
-    print("  4. Copy the Authorization header value (after 'Bearer ')\n")
+    
+    if not AUTH_TOKEN:
+        print("How to get your token:")
+        print("  1. Open milkbasket.com and log in")
+        print("  2. Open DevTools → Network tab")
+        print("  3. Click any request to consumerbff.milkbasket.com")
+        print("  4. Copy the Authorization header value (after 'Bearer ')\n")
+        print("  💡 Tip: Save this as MILKBASKET_BEARER_TOKEN in your .env file to skip this prompt.")
+        AUTH_TOKEN = input("\nPaste your Bearer token: ").strip()
 
-    AUTH_TOKEN = input("Paste your Bearer token: ").strip()
     if not AUTH_TOKEN:
         print("❌  No token provided. Exiting.")
         exit(1)
+
+    if not GEMINI_API_KEY:
+        GEMINI_API_KEY = input("Paste your Gemini API Key (optional, Enter to skip AI): ").strip()
 
     print("\n📅  Filter by Date (Optional, press Enter to skip)")
     start_date_str = input("  Start Date (YYYY-MM-DD): ").strip()
@@ -221,33 +318,79 @@ if __name__ == "__main__":
     orders = fetch_orders()
     
     # Filter orders by date if requested
-    if start_date or end_date:
-        filtered_orders = []
-        for order in orders:
-            order_dt = parse_mb_date(order["date"])
-            if not order_dt:
-                continue
-            
-            is_after_start = True if not start_date else order_dt >= start_date
-            is_before_end = True if not end_date else order_dt <= end_date
-            
-            if is_after_start and is_before_end:
-                filtered_orders.append(order)
-        orders = filtered_orders
+    filtered_orders = []
+    earliest_date = None
+    latest_date = None
 
+    for order in orders:
+        order_dt = parse_mb_date(order["date"])
+        if not order_dt:
+            continue
+        
+        is_after_start = True if not start_date else order_dt >= start_date
+        is_before_end = True if not end_date else order_dt <= end_date
+        
+        if is_after_start and is_before_end:
+            filtered_orders.append(order)
+            if not earliest_date or order_dt < earliest_date: earliest_date = order_dt
+            if not latest_date or order_dt > latest_date: latest_date = order_dt
+    
+    orders = filtered_orders
     print(f"    Found {len(orders)} orders in range\n")
 
     # Step 2: fetch detail for each order
+    all_rows = []
+    unique_items = set()
     for i, order in enumerate(orders, 1):
         order_id = int(order["id"])
-        print(f"[{i}/{len(orders)}] Order {order_id} — {order['date']} — ₹{order['amount']}")
+        order_date = order["date"].strip()
+        print(f"[{i}/{len(orders)}] Order {order_id} — {order_date} — ₹{order['amount']}")
 
         try:
             detail = fetch_order_detail(order_id)
             print_order(detail)
+            
+            # Collect data for CSV
+            for section in detail["data"]:
+                for item in section["data"]:
+                    unique_items.add(item["name"])
+                    all_rows.append({
+                        "order date": order_date,
+                        "item name": item["name"],
+                        "quantity": item["order"]["quantity"],
+                        "mrp": item["price"]["mrp"]["value"],
+                        "price": item["price"]["price"]["value"]
+                    })
         except Exception as e:
             print(f"    ⚠️  Failed: {e}")
 
         time.sleep(0.5)  # be polite to their servers
+
+    # Step 3: Smart Categorization
+    if all_rows:
+        category_map = categorize_items_smart(list(unique_items))
+        # Normalize keys in category_map for robust lookup
+        normalized_map = {str(k).strip().lower(): v for k, v in category_map.items()}
+        
+        for row in all_rows:
+            item_key = str(row["item name"]).strip().lower()
+            row["category"] = normalized_map.get(item_key, "others")
+
+    # Step 4: Organized Export
+    if all_rows:
+        if not os.path.exists(SUMMARY_DIR):
+            os.makedirs(SUMMARY_DIR)
+        
+        date_range_str = "all"
+        if earliest_date and latest_date:
+            date_range_str = f"{earliest_date.strftime('%Y-%m-%d')}-to-{latest_date.strftime('%Y-%m-%d')}"
+            
+        filename = os.path.join(SUMMARY_DIR, f"orders-{date_range_str}.csv")
+        keys = all_rows[0].keys()
+        with open(filename, "w", newline="", encoding="utf-8") as f:
+            dict_writer = csv.DictWriter(f, fieldnames=keys)
+            dict_writer.writeheader()
+            dict_writer.writerows(all_rows)
+        print(f"\n📁  Exported {len(all_rows)} items to {filename}")
 
     print("\n✅  Done!\n")
