@@ -95,6 +95,9 @@ If you encounter an item that doesn't fit (e.g., "Pet Food"), you can:
 3.  Confirm with `y` to create it.
 4.  The script will automatically update `categories_config.json` and include "Pets" in your final spending summary.
 
+> [!IMPORTANT]
+> **Maintenance Note**: If you manually rename or delete categories in `categories_config.json`, you should also delete or update `item_categories.csv`. Since the CSV stores historical mappings, it may still contain references to old category names that no longer exist in your config, which could lead to inconsistencies in your spending summary.
+
 ---
 
 ## 📊 Post-Run Analysis
