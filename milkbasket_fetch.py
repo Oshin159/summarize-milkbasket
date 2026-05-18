@@ -82,7 +82,7 @@ HEADERS = {
     "origin": "https://milkbasket.com",
     "pragma": "no-cache",
     "referer": "https://milkbasket.com/",
-    "role": "0",
+    "role": "1",
     "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
 }
 
@@ -182,6 +182,137 @@ def categorize_item_interactive(name, cache):
 # ─────────────────────────────────────────────
 # API CALLS
 # ─────────────────────────────────────────────
+
+def send_otp(phone_number):
+    """Sends OTP to the provided phone number."""
+    payload = {
+        "operationName": "verifyNumber",
+        "variables": {
+            "phone": phone_number,
+            "retry": False,
+            "retryType": "",
+            "appHash": "#iymUES6mGJt",
+            "udid": "hesH0PXrK0vSqzFK"
+        },
+        "query": """
+            mutation verifyNumber($phone: String!, $retry: Boolean!, $retryType: String!, $appHash: String!, $udid: String!) {
+              verifyPhoneNumber(
+                phone: $phone
+                retry: $retry
+                retryType: $retryType
+                appHash: $appHash
+                udid: $udid
+              ) {
+                status
+                error
+                errorMsg
+                otpBlockTime
+                __typename
+              }
+            }
+        """
+    }
+    # For login, we don't have the auth token yet
+    login_headers = HEADERS.copy()
+    if "authorization" in login_headers:
+        del login_headers["authorization"]
+    
+    resp = requests.post(API_URL, headers=login_headers, json=payload, timeout=15)
+    resp.raise_for_status()
+    return resp.json()["data"]["verifyPhoneNumber"]
+
+
+def verify_otp(phone_number, otp):
+    """Verifies the OTP and returns the auth token."""
+    payload = {
+        "operationName": "login",
+        "variables": {
+            "phone": phone_number,
+            "otp": otp,
+            "appVersion": "8.0.9.0",
+            "binaryVersion": "8.0.9",
+            "source": "web",
+            "deviceDetail": {
+                "udid": "hesH0PXrK0vSqzFK",
+                "deviceModel": "unknown",
+                "isVirtual": False,
+                "manufacturer": "unknown",
+                "platform": "web",
+                "androidVersion": 0,
+                "advertisingId": "",
+                "tracking": False,
+                "trackierId": ""
+            }
+        },
+        "query": """
+            mutation login($phone: String!, $otp: String!, $appVersion: String!, $binaryVersion: String!, $source: String!, $inviteCode: String, $deviceDetail: DeviceDetailInput) {
+              login(
+                phone: $phone
+                otp: $otp
+                appVersion: $appVersion
+                binaryVersion: $binaryVersion
+                source: $source
+                inviteCode: $inviteCode
+                deviceDetail: $deviceDetail
+              ) {
+                status
+                authExpiry
+                authKey
+                errorMsg
+                refreshKey
+                __typename
+              }
+            }
+        """
+    }
+    login_headers = HEADERS.copy()
+    if "authorization" in login_headers:
+        del login_headers["authorization"]
+
+    resp = requests.post(API_URL, headers=login_headers, json=payload, timeout=15)
+    print(resp.status_code)
+    print(resp.text)
+    resp.raise_for_status()
+    return resp.json()["data"]["login"]
+
+
+def perform_login():
+    """Handles the full login flow."""
+    print("\n🔑  Milkbasket Login")
+    phone = input("  Enter your 10-digit phone number: ").strip()
+    if not phone:
+        return None
+
+    print(f"  Sending OTP to {phone}...")
+    try:
+        res = send_otp(phone)
+        if not res.get("status"):
+            print(f"  ❌ Failed to send OTP: {res.get('errorMsg')}")
+            return None
+            
+        otp = input("  Enter the OTP received: ").strip()
+        if not otp:
+            return None
+            
+        print("  Verifying OTP...")
+        login_res = verify_otp(phone, otp)
+        
+        if login_res.get("status") and login_res.get("authKey"):
+            token = login_res["authKey"]
+            print("  ✅ Login successful!")
+            
+            # Save to .env
+            with open(".env", "a") as f:
+                f.write(f"\nMILKBASKET_BEARER_TOKEN={token}\n")
+            print("  💾 Token saved to .env for future use.")
+            return token
+        else:
+            print(f"  ❌ Login failed: {login_res.get('errorMsg')}")
+            return None
+    except Exception as e:
+        print(f"  ❌ Login error: {e}")
+        return None
+
 
 def fetch_orders():
     """Fetch all order IDs and basic info."""
@@ -289,15 +420,10 @@ if __name__ == "__main__":
     print("\n🛒  Milkbasket Order Fetcher\n")
     
     if not AUTH_TOKEN:
-        print("How to get your token:")
-        print("  1. Open milkbasket.com and log in")
-        print("  2. Open DevTools → Network tab")
-        print("  3. Click any request to consumerbff.milkbasket.com")
-        print("  4. Copy the Authorization header value (after 'Bearer ')\n")
-        AUTH_TOKEN = input("\nPaste your Bearer token: ").strip()
+        AUTH_TOKEN = perform_login()
 
     if not AUTH_TOKEN:
-        print("❌  No token provided. Exiting.")
+        print("❌  No token available. Exiting.")
         exit(1)
 
     print("\n📅  Filter by Date (Enter for last 3 months)")
