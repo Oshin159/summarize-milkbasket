@@ -5,14 +5,14 @@ Milkbasket Order Fetcher
 Fetches all orders and prints a parsed summary per order.
 
 Usage:
-    pip install requests
+    pip install requests python-dotenv
     python3 milkbasket_fetch.py
 
 Steps:
-    1. Go to milkbasket.com, login
-    2. Open DevTools → Network → any GraphQL request
-    3. Copy the Bearer token from the Authorization header
-    4. Paste it below
+    1. Run the script and enter your 10-digit mobile number.
+    2. Enter the OTP received on your device.
+    3. The authentication token will be automatically saved to a local `.env` file for next usage.
+    4. To change or reset the login account, simply delete the `.env` file.
 """
 
 import requests
@@ -270,8 +270,6 @@ def verify_otp(phone_number, otp):
         del login_headers["authorization"]
 
     resp = requests.post(API_URL, headers=login_headers, json=payload, timeout=15)
-    print(resp.status_code)
-    print(resp.text)
     resp.raise_for_status()
     return resp.json()["data"]["login"]
 

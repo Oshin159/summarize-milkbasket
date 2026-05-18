@@ -3,6 +3,7 @@
 A Python tool to fetch your Milkbasket order history, categorize items (Fruits, Vegetables, Dairy, etc.), and export them to a CSV summary with a category-wise spending breakdown.
 
 ## Features
+- **Automated OTP Login Flow**: Handles mobile verification directly inside the terminal.
 - **Fetch Last 3 Months**: Automatically defaults to fetching the last 90 days of orders.
 - **Rule-Based Categorization**: Uses keywords to automatically guess categories.
 - **Interactive Training**: Asks for confirmation on new items and learns from your input.
@@ -15,8 +16,8 @@ A Python tool to fetch your Milkbasket order history, categorize items (Fruits, 
 
 ### 1. Clone the repository
 ```bash
-git clone <your-repo-url>
-cd milkbasket
+git clone [https://github.com/Oshin159/summarize-milkbasket.git](https://github.com/Oshin159/summarize-milkbasket.git)
+cd summarize-milkbasket
 ```
 
 ### 2. Set up a Virtual Environment (Recommended)
@@ -29,32 +30,6 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ```bash
 pip install -r requirements.txt
 ```
-
-### 4. Configure Environment Variables
-Create a `.env` file in the root directory:
-```bash
-touch .env
-```
-Add your Bearer token (see the guide below):
-```env
-MILKBASKET_BEARER_TOKEN=your_token_here
-```
-
----
-
-## 🔑 How to get your Bearer Token
-
-1.  Open [milkbasket.com](https://milkbasket.com) in Chrome or any modern browser and **log in**.
-2.  Right-click anywhere on the page and select **Inspect** (or press `F12`) to open **DevTools**.
-3.  Go to the **Network** tab.
-4.  Refresh the page or click on "Order History".
-5.  Look for a request named `graphql` (or any request starting with `consumerbff`).
-6.  Click on the request and look at the **Headers** section on the right.
-7.  Find the `Authorization` header. It will look like:
-    `Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...`
-8.  Copy the long string **after** the word `Bearer `.
-9.  Paste this string into your `.env` file as `MILKBASKET_BEARER_TOKEN`.
-
 ---
 
 ## 🚀 Detailed Usage & Workflow
@@ -64,12 +39,14 @@ Once your `.env` is set up, run the script:
 ```bash
 python3 milkbasket_fetch.py
 ```
-
-1.  **Date Selection**: On startup, it will ask for a Start/End date. 
+1. **Login Flow**: On startup, the script handles your session automatically:
+   - **First Run**: Enter your **10-digit registered mobile number** and the **OTP** sent to your phone to log in. Your session token will be automatically saved to a `.env` file so you don't have to log in again.
+   - **Changing Accounts**: If you ever want to change the logged-in user or sign in with a different phone number, simply delete the `.env` file from the root folder.
+2.  **Date Selection**: On startup, it will ask for a Start/End date. 
     - **Press Enter** to automatically fetch the last 3 months.
     - Or enter dates in `YYYY-MM-DD` format.
-2.  **Fetching**: The script will fetch your order list and then download details for each order sequentially.
-3.  **Interactive Categorization**: For every item, the script follows this logic:
+3.  **Fetching**: The script will fetch your order list and then download details for each order sequentially.
+4.  **Interactive Categorization**: For every item, the script follows this logic:
     - **Check Cache**: Has this item been seen before? If yes, use the saved category.
     - **Keyword Guess**: Does the item name contain any keywords from `categories_config.json`? (e.g., "Tomato" contains "tomato" -> Vegetables).
     - **User Prompt**: If it's a new item or the guess is "others", it will ask you to confirm.
