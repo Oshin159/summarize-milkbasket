@@ -16,14 +16,13 @@ A Python tool to fetch your Milkbasket order history, categorize items (Fruits, 
 
 ### 1. Clone the repository
 ```bash
-git clone [https://github.com/Oshin159/summarize-milkbasket.git](https://github.com/Oshin159/summarize-milkbasket.git)
+git clone https://github.com/Oshin159/summarize-milkbasket.git
 cd summarize-milkbasket
 ```
 
 ### 2. Set up a Virtual Environment (Recommended)
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ```
 
 ### 3. Install Dependencies
@@ -35,8 +34,8 @@ pip install -r requirements.txt
 ## 🚀 Detailed Usage & Workflow
 
 ### Running the Script
-Once your `.env` is set up, run the script:
 ```bash
+source .venv/bin/activate
 python3 milkbasket_fetch.py
 ```
 1. **Login Flow**: On startup, the script handles your session automatically:
@@ -85,3 +84,13 @@ After the script finishes:
     - Importing into **Google Sheets** or **Excel**.
     - Creating pivot tables to see spending trends over time.
     - Auditing your monthly grocery expenses.
+
+
+## 🛠 Troubleshooting
+
+If the script stops working, fails to fetch data, or throws authentication errors, try the following steps:
+
+1. **Clear the Session**: Delete the `.env` file from the root directory to wipe the cached token and force a fresh OTP handshake:
+   ```bash
+   rm .env
+2. **Update Device Identifier**: If logins consistently fail, open `milkbasket_fetch.py`, find the `UDID` configuration defined right at the top of the file, and change its value to a fresh, random alphanumeric string.
